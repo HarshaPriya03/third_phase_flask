@@ -78,7 +78,7 @@ lemmatizer = WordNetLemmatizer()
 stop_words = set(stopwords.words('english'))
 
 # Load the dataset for leave classification
-df = pd.read_csv(r"C:\Users\it\Downloads\leave_app\leave_app\type_of_leave.csv")  # Adjust path to your dataset
+df = pd.read_csv(r"C:\HarshaPriya\ML\leave_app\leave_app\type_of_leave.csv")  # Adjust path to your dataset
 
 # Preprocessing function
 def preprocess(text):
@@ -245,58 +245,8 @@ def same_diff_leaves(email):
         print(f"Database error: {err}")
         return False
 
-def rejected_and_absent(empemail):
-    try:
-        # Connect to the database
-        conn = connect_to_db()
-        cursor = conn.cursor(dictionary=True)
-
-        # First, check if the status2 count is greater than 2 in the leaves table
-        query_leaves = """
-        SELECT COUNT(*) AS status2_count
-        FROM leaves
-        WHERE empemail = %s AND status = 2;
-        """
-        cursor.execute(query_leaves, (empemail,))
-        status2_result = cursor.fetchone()
-
-        # If the count of status2=1 is not greater than 2, return False
-        if status2_result['status2_count'] < 2:
-            return False
-
-        # If status2=1 count > 2, proceed to check the absent table
-        query_absent = """
-        SELECT COUNT(*) AS absent_count
-        FROM absent
-        WHERE empname = (SELECT empname FROM leaves WHERE empemail = %s LIMIT 1)
-        AND YEAR(AttendanceTime) = YEAR(CURRENT_DATE);
-        """
-        cursor.execute(query_absent, (empemail,))
-        absent_result = cursor.fetchone()
-
-        # If the count of absences in the current year is greater than 2, return True
-        if absent_result['absent_count'] > 2:
-            return True
-        return False
-
-    except mysql.connector.Error as err:
-        print(f"Database error: {err}")
-        return False
-
-
 # def rejected_and_absent(empemail):
 #     try:
-#         # Get current date and calculate the date range (March of the current year to April of the next year)
-#         today = date.today()
-#         current_year = today.year
-#         next_year = current_year + 1
-        
-#         # Start date: March 1st of the current year
-#         start_date = f"{current_year}-03-01"
-        
-#         # End date: April 30th of the next year
-#         end_date = f"{next_year}-04-30"
-
 #         # Connect to the database
 #         conn = connect_to_db()
 #         cursor = conn.cursor(dictionary=True)
@@ -319,12 +269,12 @@ def rejected_and_absent(empemail):
 #         SELECT COUNT(*) AS absent_count
 #         FROM absent
 #         WHERE empname = (SELECT empname FROM leaves WHERE empemail = %s LIMIT 1)
-#         AND AttendanceTime BETWEEN %s AND %s;
+#         AND YEAR(AttendanceTime) = YEAR(CURRENT_DATE);
 #         """
-#         cursor.execute(query_absent, (empemail, start_date, end_date))
+#         cursor.execute(query_absent, (empemail,))
 #         absent_result = cursor.fetchone()
 
-#         # If the count of absences in the range is greater than 2, return True
+#         # If the count of absences in the current year is greater than 2, return True
 #         if absent_result['absent_count'] > 2:
 #             return True
 #         return False
@@ -332,6 +282,62 @@ def rejected_and_absent(empemail):
 #     except mysql.connector.Error as err:
 #         print(f"Database error: {err}")
 #         return False
+
+
+def rejected_and_absent(empemail):
+    try:
+        # Connect to the database
+        conn = connect_to_db()
+        cursor = conn.cursor(dictionary=True)
+
+        # Get the current year and the date range from March 1st this year to March 1st next year
+        current_year = datetime.now().year
+        start_date = datetime(current_year, 3, 1).date()  # March 1 of the current year
+        end_date = datetime(current_year + 1, 3, 1).date()  # March 1 of the next year
+
+        # First, check if the status2 count is greater than 2 in the leaves table within the date range
+        query_leaves = """
+        SELECT COUNT(*) AS status2_count
+        FROM leaves
+        WHERE empemail = %s
+        AND status = 2
+        AND DATE(`from`) >= %s  -- Leave date from this year March 1st onwards
+        AND DATE(`from`) < %s  -- Leave date until next year March 1st
+        """
+        cursor.execute(query_leaves, (empemail, start_date, end_date))
+        status2_result = cursor.fetchone()
+
+        # Debugging: Print the status2_count
+        # print(f"Status2 Count: {status2_result['status2_count']}")
+
+        # If the count of status2 is not greater than or equal to 3, return False
+        if status2_result['status2_count'] < 3 :
+            return False
+
+        # If status2 count >= 3, proceed to check the absent table within the same date range
+        query_absent = """
+        SELECT COUNT(*) AS absent_count
+        FROM absent
+        WHERE empname = (SELECT empname FROM leaves WHERE empemail = %s LIMIT 1)
+        AND DATE(AttendanceTime) >= %s  -- Absence after March 1st this year
+        AND DATE(AttendanceTime) < %s  -- Absence until March 1st next year
+        """
+        cursor.execute(query_absent, (empemail, start_date, end_date))
+        absent_result = cursor.fetchone()
+
+        # Debugging: Print the absent_count
+        # print(f"Absent Count: {absent_result['absent_count']}")
+
+        # If the count of absences in the specified date range is greater than 2, return True
+        if absent_result['absent_count'] > 2:
+            return True
+
+        return False
+
+    except mysql.connector.Error as err:
+        print(f"Database error: {err}")
+        return False
+
     
 def check_casual_leave_exceeded_one(email):
     try:
