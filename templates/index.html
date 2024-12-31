@@ -14,7 +14,8 @@
         <label for="leave_type">Leave Type:</label>
         <select id="leave_type" name="leave_type" required>
             <option value="Sick Leave" {% if leave_type == 'Sick Leave' %}selected{% endif %}>Sick Leave</option>
-            <option value="Casual Leave" {% if leave_type == 'Casual Leave' %}selected{% endif %}>Casual Leave</option>    
+            <option value="Casual Leave" {% if leave_type == 'Casual Leave' %}selected{% endif %}>Casual Leave</option>
+            <option value="Comp Off" {% if leave_type == 'Comp Off' %}selected{% endif %}>Comp Off</option>    
         </select><br><br>
 
         <label for="from_date">From Date:</label>

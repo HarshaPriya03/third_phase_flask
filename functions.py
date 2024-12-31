@@ -477,8 +477,8 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
             # Check if the user is eligible to apply for leave
             if data["can_apply_leave"].iloc[0] == True:
                 # Casual Leave case
-                if selected_leave_type == "Casual Leave" and leave_status != "Sick Leave":
-                    if leave_status != "Sick Leave" and today < from_date:
+                if selected_leave_type == "Casual Leave" and leave_status != "Sick Leave" and selected_leave_type != "Comp Off":
+                    if leave_status != "Sick Leave" and today < from_date and selected_leave_type != "Comp Off":
                         if delta <= data["lb"].iloc[0] and delta < 4:
                             if is_high_frequency: 
                                 print(h)
@@ -761,6 +761,13 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                             if employee_leave_rejection:
                                 ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                             return ls
+                elif selected_leave_type == "Comp Off":
+                    comp_off_balance = pd.to_numeric(data["co"].iloc[0], errors='coerce')
+                    if comp_off_balance > 0:
+                        ls["Comp Off"] = "Your leave request will be processed."
+                    else:
+                        ls["Comp Off"] = "You are not eligible to apply for Comp Off. You have no remaining balance"   
+                    return ls         
                     
                 else:
                     print("Leave type isn't matching with the leave status")
@@ -906,7 +913,13 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                             if employee_leave_rejection:
                                 ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                             return ls
-                            
+                elif selected_leave_type == "Comp Off":
+                    comp_off_balance = pd.to_numeric(data["co"].iloc[0], errors='coerce')
+                    if comp_off_balance > 0:
+                        ls["Comp Off"] = "Your leave request will be processed."
+                    else:
+                        ls["Comp Off"] = "You are not eligible to apply for Comp Off. You have no remaining balance"   
+                    return ls            
                 else:
                     print("Leave type isn't matching with the leave status")
                     return {
@@ -928,7 +941,7 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
 
 # Create widgets for the form
 leave_type_input = widgets.Dropdown(
-    options=['Casual Leave', 'Sick Leave'],
+    options=['Casual Leave', 'Sick Leave','Comp Off'],
     description='Leave Type:',
     disabled=False
 )
@@ -983,7 +996,7 @@ def fetch_leave_data_for_previous_month():
         WHERE 
             MONTH(l.from) = MONTH(CURRENT_DATE)  -- Current month
             AND YEAR(l.from) = YEAR(CURRENT_DATE)  -- Current year
-            AND (DATEDIFF(l.to, l.from) = 0 OR DATEDIFF(l.to, l.from) = 1)  -- Leave duration of 0 or 1 day
+            AND (DATEDIFF(l.to, l.from) = 0 OR DA  TEDIFF(l.to, l.from) = 1)  -- Leave duration of 0 or 1 day
         GROUP BY 
             l.empemail  -- Group by employee email
         HAVING 
