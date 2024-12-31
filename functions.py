@@ -371,6 +371,35 @@ def check_casual_leave_exceeded_one(email):
         print(f"Database error: {err}")
         return False
     
+
+
+def manager(empemail):
+    try:
+        conn=connect_to_db()
+        cursor=conn.cursor(dictionary=True)
+        query="""
+        SELECT
+            m.email
+        FROM
+            manager m
+        WHERE
+            m.email = %s
+        
+         """
+        cursor.execute(query,(empemail,))
+        result=cursor.fetchall()
+        conn.close()
+    
+        if result:
+           return True
+        return False
+
+
+    except mysql.connector.Error as err:
+        print(f"Database error: {err}") 
+        return False
+    
+    
 def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_value,ls):
     with output:
         clear_output()  # Clear previous outputs
@@ -425,7 +454,9 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
         is_high_frequency = high_leave_frequency(email)
         h = "Warning: Your leave frequency is high. You have already taken more than 6 days of leave this month." if is_high_frequency else ""
 
-        
+        manager_leave=manager(email)
+        m="Your leave can be approved only by HR." if manager_leave else ""
+
         # Extend the date range and check for Sundays
         delta = (to_date - from_date).days + 1  # Number of days for the leave
         extended_weekdays = get_weekdays(from_date, to_date)
@@ -447,7 +478,7 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
             if data["can_apply_leave"].iloc[0] == True:
                 # Casual Leave case
                 if selected_leave_type == "Casual Leave" and leave_status != "Sick Leave":
-                    if leave_status != "Sick Leave" and today < from_date and employee_leave_rejection == False:
+                    if leave_status != "Sick Leave" and today < from_date:
                         if delta <= data["lb"].iloc[0] and delta < 4:
                             if is_high_frequency: 
                                 print(h)
@@ -469,6 +500,8 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 ls["Please Check"]="You are applying the leaves of same frequency"
                             if sunday_count > 0: 
                                 ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                            if employee_leave_rejection:
+                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                             return ls
                         elif delta > data["lb"].iloc[0]:
                             if is_high_frequency: 
@@ -492,6 +525,8 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 ls["Please Check"]="You are applying the leaves of same frequency"
                             if sunday_count > 0: 
                                 ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                            if employee_leave_rejection:
+                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                             return ls
                         elif delta > 3:
                             if is_high_frequency: 
@@ -512,25 +547,18 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 ls["Please Check"]="You are applying the leaves of same frequency"
                             if sunday_count > 0: 
                                 ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                            if employee_leave_rejection:
+                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                             return ls
-                    elif employee_leave_rejection:
-                        print(a)
-                        return {
-                            "Error" : "You are rejected more than 2 times and you are absent for more than 2 days in this current year."
-                        }
                     elif today == from_date:
                         # Check if the employee has exceeded casual leave more than 2 times
-                        if selected_leave_type == "Casual Leave" and check_casual_leave and employee_leave_rejection == False:
+                        if selected_leave_type == "Casual Leave" and check_casual_leave:
                             print(k)
                             return{
                                 "Decision": "Rejected",
                                 "Reason" : "You have already applied for Casual Leave more than 2 times where applied == from dates"
                             }
-                        elif employee_leave_rejection:
-                            print(a)
-                            return {
-                                "Error" : "You are rejected more than 2 times and you are absent for more than 2 days in this current year."
-                            }
+                        
                         else:
                             if delta <= data["lb"].iloc[0] and delta < 4:
                                 ls={
@@ -557,6 +585,8 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                     ls["Please Check"]="You are applying the leaves of same frequency"
                                 if sunday_count > 0: 
                                     ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                if employee_leave_rejection:
+                                    ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                                 return ls
                             elif delta > data["lb"].iloc[0]:
                                 if is_high_frequency: 
@@ -584,12 +614,9 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                     ls["Please Check"]="You are applying the leaves of same frequency"
                                 if sunday_count > 0: 
                                     ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                if employee_leave_rejection:
+                                    ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                                 return ls
-                            elif employee_leave_rejection:
-                                print(a)
-                                return {
-                                "Error" : "You are rejected more than 2 times and you are absent for more than 2 days in this current year."
-                                }
                             elif delta > 3:
                                 if is_high_frequency: 
                                     print(h)
@@ -614,6 +641,8 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                     ls["Please Check"]="You are applying the leaves of same frequency"
                                 if sunday_count > 0: 
                                     ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                if employee_leave_rejection:
+                                    ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                                 return ls
                     elif today > from_date:
                         print("Today's date should be less than the from date")
@@ -623,7 +652,7 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                 
                 # Sick Leave case
                 elif selected_leave_type == "Sick Leave" and leave_status == "Sick Leave":
-                    if today <= from_date and employee_leave_rejection == False:
+                    if today <= from_date:
                         if delta > data["lb"].iloc[0]:
                             if is_high_frequency: 
                                 print(h)
@@ -645,6 +674,8 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 ls["Please Check"]="You are applying the leaves of same frequency"
                             if sunday_count > 0: 
                                 ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                            if employee_leave_rejection:
+                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                             return ls
                         elif delta <= data["lb"].iloc[0] and delta < 4:
                             if is_high_frequency: 
@@ -665,6 +696,8 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 ls["Please Check"]="You are applying the leaves of same frequency"
                             if sunday_count > 0: 
                                 ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                            if employee_leave_rejection:
+                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                             return ls
                         
                         elif delta <= data["lb"].iloc[0] and delta >= 4:
@@ -685,8 +718,10 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 ls["Please Check"]="You are applying the leaves of same frequency"
                             if sunday_count > 0: 
                                 ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                            if employee_leave_rejection:
+                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                             return ls
-                    elif today > from_date and employee_leave_rejection == False:
+                    elif today > from_date :
                         if today >= to_date:
                             if is_high_frequency: 
                                 print(h)
@@ -703,11 +738,7 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                             if sunday_count > 0: 
                                 ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
                             return ls
-                        elif employee_leave_rejection:
-                            print(a)
-                            return {
-                                "Error" : "You are rejected more than 2 times and you are absent for more than 2 days in this current year."
-                            }
+                        
                         else:
                             if is_high_frequency: 
                                 print(h)
@@ -727,12 +758,10 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 ls["Please Check"]="You are applying the leaves of same frequency"
                             if sunday_count > 0: 
                                 ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                            if employee_leave_rejection:
+                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                             return ls
-                    elif employee_leave_rejection:
-                        print(a)
-                        return {
-                                "Error" : "You are rejected more than 2 times and you are absent for more than 2 days in this current year."
-                        }
+                    
                 else:
                     print("Leave type isn't matching with the leave status")
                     return {
@@ -740,7 +769,7 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                     }
             
             elif data["can_apply_leave"].iloc[0] == False:
-                if selected_leave_type == "Casual Leave" and leave_status != "Sick Leave" and employee_leave_rejection == False:
+                if selected_leave_type == "Casual Leave" and leave_status != "Sick Leave" :
                     if leave_status != "Sick Leave" and today < from_date:
                         if delta >= 3:
                             if is_high_frequency: 
@@ -768,6 +797,8 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 ls["Please Check"]="You are applying the leaves of same frequency"
                             if sunday_count > 0: 
                                 ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                            if employee_leave_rejection:
+                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                             return ls
                         elif delta < 3:
                             if sunday_count > 0: 
@@ -788,13 +819,15 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 ls["Please Check"]="You are applying the leaves of same frequency"
                             if sunday_count > 0: 
                                 ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                            if employee_leave_rejection:
+                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                             return ls
                     elif today >= from_date:
                         print("You cant apply on the same date as cls leave type ")
                         return {
                             "Error":"You cant apply on the same date as cls leave type"
                         }
-                elif selected_leave_type == "Sick Leave" and leave_status == "Sick Leave" and employee_leave_rejection == False:
+                elif selected_leave_type == "Sick Leave" and leave_status == "Sick Leave":
                     if today <= from_date and today < to_date:
                         if is_high_frequency: 
                             print(h)
@@ -819,6 +852,8 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                             ls["Please Check"]="You are applying the leaves of same frequency"
                         if sunday_count > 0: 
                             ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                        if employee_leave_rejection:
+                            ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                         return ls
                     elif today > from_date:
                         if today >= to_date:
@@ -868,13 +903,10 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 ls["Please Check"]="You are applying the leaves of same frequency"
                             if sunday_count > 0: 
                                 ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                            if employee_leave_rejection:
+                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
                             return ls
                             
-                elif employee_leave_rejection:
-                    print(a)
-                    return {
-                        "Error" : "You are rejected more than 2 times and you are absent for more than 2 days in this current year."
-                    }
                 else:
                     print("Leave type isn't matching with the leave status")
                     return {
