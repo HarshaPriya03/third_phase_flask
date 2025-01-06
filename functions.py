@@ -14,6 +14,7 @@ from sklearn.metrics import accuracy_score, classification_report
 from datetime import datetime
 from datetime import timedelta
 from datetime import date, timedelta
+import calendar
 import pickle
 # Load the pre-trained vectorizer and model
 
@@ -103,7 +104,7 @@ def check_casual_leave_exceeded(email):
             SELECT empemail, COUNT(*) AS record_count
             FROM leaves
             WHERE leavetype = 'CASUAL LEAVE'
-            AND DATE(applied) = DATE(`from`)
+            AND DATE(applied) = DATE(from)
             AND MONTH(applied) = MONTH(CURRENT_DATE) 
             AND YEAR(applied) = YEAR(CURRENT_DATE)
             AND empemail = %s
@@ -157,10 +158,10 @@ def high_leave_frequency(email):
         # Query to fetch leaves for the provided email
         query = """
                 SELECT 
-                    `from`, 
-                    `to`
+                    from, 
+                    to
                 FROM leaves
-                WHERE empemail = %s AND YEAR(`from`) = %s AND MONTH(`from`) = %s
+                WHERE empemail = %s AND YEAR(from) = %s AND MONTH(from) = %s
                 """
         cursor.execute(query, (email, current_year, current_month))
         leaves = cursor.fetchall()
@@ -301,8 +302,8 @@ def rejected_and_absent(empemail):
         FROM leaves
         WHERE empemail = %s
         AND status = 2
-        AND DATE(`from`) >= %s  -- Leave date from this year March 1st onwards
-        AND DATE(`from`) < %s  -- Leave date until next year March 1st
+        AND DATE(from) >= %s  -- Leave date from this year March 1st onwards
+        AND DATE(from) < %s  -- Leave date until next year March 1st
         """
         cursor.execute(query_leaves, (empemail, start_date, end_date))
         status2_result = cursor.fetchone()
@@ -349,7 +350,7 @@ def check_casual_leave_exceeded_one(email):
             SELECT empemail, COUNT(*) AS record_count
             FROM leaves
             WHERE leavetype = 'CASUAL LEAVE'
-            AND DATE(applied) = DATE(`from`)
+            AND DATE(applied) = DATE(from)
             AND MONTH(applied) = MONTH(CURRENT_DATE) 
             AND YEAR(applied) = YEAR(CURRENT_DATE)
             AND empemail = %s
@@ -398,8 +399,60 @@ def manager(empemail):
     except mysql.connector.Error as err:
         print(f"Database error: {err}") 
         return False
+
+
+
+def connect_to_db():
+    return mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="",
+        database="leave_data"
+    )
+
+def salary(empemail):
+    try:
+        conn = connect_to_db()
+        cursor = conn.cursor(dictionary=True)
+        query= """
+        SELECT empname 
+        FROM leaves 
+        WHERE empemail = %s LIMIT 1
+        """
+        cursor.execute(query, (empemail,))
+        result = cursor.fetchone() 
+
+        if result:
+            empname = result['empname']
+            query_ctc = """
+            SELECT ctc
+            FROM payroll_msalarystruc
+            WHERE empname = %s LIMIT 1
+            """
+            cursor.execute(query_ctc, (empname,))
+            ctc_result = cursor.fetchone()
+
+            if ctc_result:
+                return ctc_result['ctc'] 
+            else:
+                print("No ctc data found for the employee.")
+                return False
+        else:
+            print(f"No employee found with the email: {empemail}")
+            return False
+
+    except mysql.connector.Error as err:
+        print(f"Database error: {err}")
+        return False
     
-    
+
+def calculate_lop(ctc, delta):
+    today = date.today()
+    current_month_days = calendar.monthrange(today.year, today.month)[1]  
+    per_day_pay = int(ctc) / int(current_month_days)  
+    return per_day_pay
+
+
 def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_value,ls):
     with output:
         clear_output()  # Clear previous outputs
@@ -414,9 +467,9 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
         if leave_reason.lower() in ["personal problem", "personal issue","personal"]:
             print("Decision : Rejected \n Detailed Feedback : Leave Rejected: Your leave request has been rejected due to the reason being a personal problem/issue \n Final Decision : Leave cannot be approved.")
             ls= {
-            "Decision": "Rejected",
-            "Detailed Feedback": "Your leave request has been rejected due to the reason being a personal problem/issue",
-            "Final Decision" : "Leave cannot be approved"
+                   "Decision": "Rejected",
+                   "Feedback": "The leave request has been declined as it falls under a personal problem/issue category.",
+                   "Final Decision": "Leave cannot be approved"
             }
             return ls
         leave_status = predict_sick_leave(leave_reason, log_reg_model, vectorizer)  # Assume model and vectorizer are available
@@ -424,18 +477,19 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
         if not from_date or not to_date:
             print("Decision : Rejected \n Detailed Feedback : Please select both 'From Date' and 'To Date' \n Final Decision : Incomplete data provided.")
             ls= {
-            "Decision": "Rejected",
-            "Detailed Feedback": "Please select both 'From Date' and 'To Date'",
-            "Final Decision" : "Incomplete data provided."
+                "Decision": "Rejected",
+                "Feedback": "Both 'From Date' and 'To Date' must be provided.",
+                "Final Decision": "Incomplete data provided."
             }
             return ls
 
         elif from_date > to_date:
             print("'Decision: Rejected \n Detailed feedback: From Date' cannot be later than 'To Date'. Please correct the dates. \n Final Decision: Invalid date range.")
             ls= {
-            "Decision": "Rejected",
-            "Detailed Feedback": "From Date' cannot be later than 'To Date'",
-            "Final Decision" : "Invalid date range"
+                  "Decision": "Rejected",
+                    "Feedback": "The 'From Date' cannot be later than the 'To Date'. Please correct the date range.",
+                    "Final Decision": "Invalid date range"
+
             }
             return ls
         
@@ -464,6 +518,14 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
 
         # Adjust delta by adding the number of Sundays in the range
         delta += sunday_count
+        
+        #LOP
+        ctc = salary(email)
+        if not ctc:
+            print("Failed to calculate LOP: Unable to fetch employee's CTC.")
+            return
+        per_day_pay = calculate_lop(ctc, delta)
+
 
         # Only create the 'e' message when Sundays are present
         e = ""
@@ -491,17 +553,17 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                             print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
                             ls= {
                                 "Decision": "Accepted",
-                                "Detailed Feedback": "Leave balance is sufficient",
-                                "Final Balance" : f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
+                                "Feedback": "Your leave request has been approved as the available balance is sufficient.",
+                                "Final Balance": f"Your final leave balance, after deducting the requested leave days, is {data['lb'].iloc[0] - delta}."
                                 }
-                            if is_high_frequency: 
-                                ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            if is_high_frequency:
+                                ls["Warning"] = "Your leave frequency appears to be high. You have already taken more than 6 days of leave this month."
                             if same_diff:
-                                ls["Please Check"]="You are applying the leaves of same frequency"
-                            if sunday_count > 0: 
-                                ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                ls["Please Check"] = "You are applying for leave at the same frequency. Kindly review your request."
+                            if sunday_count > 0:
+                                ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
                             if employee_leave_rejection:
-                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                ls["Alert"] = "A pattern of leave requests with a high likelihood of rejection and absenteeism has been detected. This may reduce the chances of approval, and HR intervention may be necessary to resolve this matter."
                             return ls
                         elif delta > data["lb"].iloc[0]:
                             if is_high_frequency: 
@@ -514,20 +576,24 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                             print("Requested leaves are exceeding the leave balance")
                             print(f"So it needs HR review & there will be LOP for {delta - data['lb'].iloc[0]} days")
                             print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
-                            ls={
-                            "Note":"Requested leaves are exceeding the leave balance",
-                            "Detailed Feedback":f"So it needs HR review & there will be LOP for {delta - data['lb'].iloc[0]} days",
-                            "Final Balance":f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
+                            ls = {
+                                "Note": "The requested leave duration exceeds your available leave balance.",
+                                "Detailed Feedback": f"HR review is required, and there will be a Leave Without Pay (LOP) for {delta - data['lb'].iloc[0]} day(s).",
+                                "Final Balance": f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}.",
+                                "LOP Deducted" : f"Thus, ₹{(delta - data['lb'].iloc[0])*per_day_pay:.2f} would be deducted from  your salary as LOP."
                             }
-                            if is_high_frequency: 
-                                ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            
+                            if is_high_frequency:
+                                ls["Warning"] = "Your leave frequency appears to be high, having already taken more than 6 days of leave this month."
                             if same_diff:
-                                ls["Please Check"]="You are applying the leaves of same frequency"
-                            if sunday_count > 0: 
-                                ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                ls["Please Check"] = "You are applying for leave at the same frequency. Please review your request."
+                            if sunday_count > 0:
+                                ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
                             if employee_leave_rejection:
-                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                ls["Alert"] = "A pattern of leave requests with a high likelihood of rejection and absenteeism has been detected. This may reduce the likelihood of approval, and HR intervention is necessary to address this issue."
+                                
                             return ls
+
                         elif delta > 3:
                             if is_high_frequency: 
                                 print(h)
@@ -537,57 +603,66 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 print(e)  # Print only if Sundays exist
                             print("As you are applying for more than 3 days, it needs HR review")
                             print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
-                            ls={
-                                 "Request Pending" :"As you are applying for more than 3 days, it needs  HR review",
-                                 "Final Balance":f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
+                            ls = {
+                                "Request Pending": "Since your leave request exceeds 3 days, it requires HR review.",
+                                "Final Balance": f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}."
                             }
-                            if is_high_frequency: 
-                                ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            
+                            if is_high_frequency:
+                                ls["Warning"] = "Your leave frequency is high, having already taken more than 6 days of leave this month."
                             if same_diff:
-                                ls["Please Check"]="You are applying the leaves of same frequency"
-                            if sunday_count > 0: 
-                                ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                ls["Please Check"] = "You are applying for leave at the same frequency. Kindly review your request."
+                            if sunday_count > 0:
+                                ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
                             if employee_leave_rejection:
-                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                ls["Alert"] = "A pattern of leave requests with a high likelihood of rejection and absenteeism has been detected. This may reduce the chances of approval, and HR intervention is required to address this issue."
+                            
                             return ls
+
                     elif today == from_date:
                         # Check if the employee has exceeded casual leave more than 2 times
                         if selected_leave_type == "Casual Leave" and check_casual_leave:
                             print(k)
-                            return{
+                            return {
                                 "Decision": "Rejected",
-                                "Reason" : "You have already applied for Casual Leave more than 2 times where applied == from dates"
+                                "Reason": "Your leave request has been declined as you have already applied for Casual Leave more than twice with the same 'From Date' for previous requests."
                             }
+
                         
                         else:
                             if delta <= data["lb"].iloc[0] and delta < 4:
-                                ls={
+                                ls = {
                                     "Decision": "Granted",
-                                    "Detailed Feedback" : "Leave balance is sufficient"
+                                    "Detailed Feedback": "Your leave request has been approved as the leave balance is sufficient."
                                 }
-                                if is_high_frequency: 
-                                    print(h)
+                                
+                                if is_high_frequency:
+                                    print(h)  # Assuming 'h' contains a relevant message
                                 if same_diff:
-                                    print(l)
-                                if sunday_count > 0: 
-                                    print(e)  # Print only if Sundays exist
+                                    print(l)  # Assuming 'l' contains a relevant message
+                                if sunday_count > 0:
+                                    print(e)  # Print only if Sundays are included in the leave duration
+                                
                                 print("Leave Granted")
+                                
                                 if check_casual_leave_one:
-                                    print(b)
-                                    ls["Note"]="You have already applied for leave where applied == from . If you attempt to apply for leave again on any other day, your request will be rejected."
+                                    print(b)  # Assuming 'b' contains a relevant message
+                                    ls["Note"] = "You have previously applied for leave with the same 'From Date'. Any future requests for leave on the same day will be rejected."
                                 
-                                print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
-                                ls["Final Decision"] = f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
+                                print(f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}.")
+                                ls["Final Decision"] = f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}."
                                 
-                                if is_high_frequency: 
-                                    ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                                if is_high_frequency:
+                                    ls["Warning"] = "Your leave frequency is high, having already taken more than 6 days of leave this month."
                                 if same_diff:
-                                    ls["Please Check"]="You are applying the leaves of same frequency"
-                                if sunday_count > 0: 
-                                    ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                    ls["Please Check"] = "You are applying for leave at the same frequency. Kindly review your request."
+                                if sunday_count > 0:
+                                    ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
                                 if employee_leave_rejection:
-                                    ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                    ls["Alert"] = "A pattern of leave requests with a high likelihood of rejection and absenteeism has been detected. This may reduce the chances of approval, and HR intervention is necessary."
+                                
                                 return ls
+
                             elif delta > data["lb"].iloc[0]:
                                 if is_high_frequency: 
                                     print(h)
@@ -597,26 +672,30 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                     print(e)  # Print only if Sundays exist
                                 print("Requested leaves are exceeding the leave balance")
                                 print(f"So it needs HR review & there will be LOP for {delta - data['lb'].iloc[0]} days")
-
-                                ls["request pending"]="Requested leaves are exceeding the leave balance"
-                                ls["Please Kindly"]=f" meet HR for review & there will be LOP for {delta - data['lb'].iloc[0]} days"
-
-                                if check_casual_leave_one:
-                                    print(b)
-                                    ls["Note"]="You have already applied for leave where applied == from . If you attempt to apply for leave again on any other day, your request will be rejected."
-                                print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
+                                ls = {
+                                    "Request Pending": "The requested leave duration exceeds your available leave balance.",
+                                    "Action Required": f"Please meet with HR for review. Additionally, there will be Leave Without Pay (LOP) for {delta - data['lb'].iloc[0]} day(s).",
+                                    "LOP Deducted" : f"Thus, ₹{(delta - data['lb'].iloc[0])*per_day_pay:.2f} would be deducted from  your salary as LOP."
+                                }
                                 
-                                ls["Final Decision"] = f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
-                        
-                                if is_high_frequency: 
-                                    ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                                if check_casual_leave_one:
+                                    print(b)  # Assuming 'b' contains a relevant message
+                                    ls["Note"] = "You have previously applied for leave with the same 'From Date'. Future leave requests for the same day will be rejected."
+                                
+                                print(f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}.")
+                                ls["Final Decision"] = f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}."
+                                
+                                if is_high_frequency:
+                                    ls["Warning"] = "Your leave frequency is high, as you have already taken more than 6 days of leave this month."
                                 if same_diff:
-                                    ls["Please Check"]="You are applying the leaves of same frequency"
-                                if sunday_count > 0: 
-                                    ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                    ls["Please Check"] = "You are applying for leave at the same frequency. Kindly review your request."
+                                if sunday_count > 0:
+                                    ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
                                 if employee_leave_rejection:
-                                    ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                    ls["Alert"] = "A pattern of leave requests with a high likelihood of rejection and absenteeism has been detected. This may reduce the chances of approval, and HR intervention is necessary to address the issue."
+                                
                                 return ls
+
                             elif delta > 3:
                                 if is_high_frequency: 
                                     print(h)
@@ -625,29 +704,33 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 if sunday_count > 0: 
                                     print(e)  # Print only if Sundays exist
                                 print("As you are applying for more than 3 days, it needs HR review")
-                                ls["Decision"]="Request Pending"
-                                ls["Detailed Reason"]="As you are applying for more than 3 days, it needs HR review"
+                                ls = {
+                                    "Decision": "Request Pending",
+                                    "Detailed Reason": "As your leave request exceeds 3 days, it requires HR review."
+                                }
+                                
                                 if check_casual_leave_one:
-                                    print(b)
-                                    ls["Note"]="You have already applied for leave where applied == from . If you attempt to apply for leave again on any other day, your request will be rejected."
-
-                                print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
-                                ls["Total Balance"]=f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
-
-
-                                if is_high_frequency: 
-                                    ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                                    print(b)  # Assuming 'b' contains a relevant message
+                                    ls["Note"] = "You have previously applied for leave with the same 'From Date'. Future leave requests for the same day will be rejected."
+                                
+                                print(f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}.")
+                                ls["Total Balance"] = f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}."
+                                
+                                if is_high_frequency:
+                                    ls["Warning"] = "Your leave frequency is high. You have already taken more than 6 days of leave this month."
                                 if same_diff:
-                                    ls["Please Check"]="You are applying the leaves of same frequency"
-                                if sunday_count > 0: 
-                                    ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                    ls["Please Check"] = "You are applying for leave at the same frequency. Please review your request."
+                                if sunday_count > 0:
+                                    ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
                                 if employee_leave_rejection:
-                                    ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                    ls["Alert"] = "A pattern of leave requests with a high likelihood of rejection and absenteeism has been detected. This may reduce the chances of approval, and HR intervention is necessary to address the issue."
+                                
                                 return ls
+
                     elif today > from_date:
                         print("Today's date should be less than the from date")
                         return {
-                            "Warning":"Today's date should be less than the from date"
+                            "Warning": "The selected 'From Date' must be greater than today's date."
                         }
                 
                 # Sick Leave case
@@ -664,19 +747,27 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                             print(f"LOP for {delta - data['lb'].iloc[0]} days")
                             print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
                             
-                            ls["Important"]="Submit medical certificates after coming to office as you requested leaves are more than your leave balance"
-                            ls["LOP for"]=f"{delta - data['lb'].iloc[0]} days"
-                            ls["Final Balance"] = f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
-                        
-                            if is_high_frequency: 
-                                ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            ls = {
+                                "Important": "Please submit medical certificates upon returning to the office, as your requested leave exceeds your available balance.",
+                                "LOP Days": f"{delta - data['lb'].iloc[0]} day(s) will be treated as Leave Without Pay (LOP).",
+                                "Final Balance": f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}.",
+                                "LOP Deducted" : f"Thus, ₹{(delta - data['lb'].iloc[0])*per_day_pay:.2f} would be deducted from  your salary as LOP."
+                            }
+                            
+                            if is_high_frequency:
+                                ls["Warning"] = "Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            
                             if same_diff:
-                                ls["Please Check"]="You are applying the leaves of same frequency"
-                            if sunday_count > 0: 
-                                ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                ls["Please Check"] = "You are applying for leave with the same frequency. Please review your request."
+                            
+                            if sunday_count > 0:
+                                ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
+                            
                             if employee_leave_rejection:
-                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                ls["Alert"] = "A pattern of leave requests with a high likelihood of rejection and absenteeism has been detected. This may reduce the chances of approval, and HR intervention is necessary to address the issue."
+                            
                             return ls
+
                         elif delta <= data["lb"].iloc[0] and delta < 4:
                             if is_high_frequency: 
                                 print(h)
@@ -686,19 +777,25 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 print(e)  # Print only if Sundays exist
                             print("Leave granted")
                             print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
-                            ls= {
+                            ls = {
                                 "Decision": "Accepted",
-                                "Final Balance" : f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
+                                "Final Balance": f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}."
                             }
-                            if is_high_frequency: 
-                                ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            
+                            if is_high_frequency:
+                                ls["Warning"] = "Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            
                             if same_diff:
-                                ls["Please Check"]="You are applying the leaves of same frequency"
-                            if sunday_count > 0: 
-                                ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                ls["Please Check"] = "You are applying for leave with the same frequency as before. Please review your request."
+                            
+                            if sunday_count > 0:
+                                ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
+                            
                             if employee_leave_rejection:
-                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                ls["Alert"] = "A pattern of leave requests with a high likelihood of rejection and absenteeism has been detected. This may reduce the chances of approval, and HR intervention is necessary to address the issue."
+                            
                             return ls
+
                         
                         elif delta <= data["lb"].iloc[0] and delta >= 4:
                             if is_high_frequency: 
@@ -709,18 +806,26 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 print(e)  # Print only if Sundays exist
                             print("Exceeding more than 3 days needs HR review. Submit the medical certificates after coming to office.")
                             print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
-
-                            ls["Note"]="Exceeding more than 3 days needs HR review. Submit the medical certificates after coming to office."
-                            ls["Final Balance"] = f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
-                            if is_high_frequency: 
-                                ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            ls = {
+                                "Note": "Leave requests exceeding 3 days require HR review. Please submit medical certificates upon returning to the office.",
+                                "Final Balance": f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}."
+                            }
+                            
+                            if is_high_frequency:
+                                ls["Warning"] = "Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            
                             if same_diff:
-                                ls["Please Check"]="You are applying the leaves of same frequency"
-                            if sunday_count > 0: 
-                                ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                ls["Please Check"] = "Your leave request matches the frequency of a previous request. Please review it carefully."
+                            
+                            if sunday_count > 0:
+                                ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
+                            
                             if employee_leave_rejection:
-                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                ls["Alert"] = "A pattern of leave requests with a high likelihood of rejection and absenteeism has been detected. This may reduce the chances of approval, and HR intervention is necessary to address the issue."
+                            
                             return ls
+
+                            
                     elif today > from_date :
                         if today >= to_date:
                             if is_high_frequency: 
@@ -730,14 +835,21 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                             if sunday_count > 0: 
                                 print(e)  # Print only if Sundays exist
                             print("Submit medical certificates")
-                            ls["Important"]="Submit medical certificates"
-                            if is_high_frequency: 
-                                ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            ls = {
+                                "Important": "Please submit medical certificates as requested leave exceeds your available balance."
+                            }
+                            
+                            if is_high_frequency:
+                                ls["Warning"] = "Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            
                             if same_diff:
-                                ls["Please Check"]="You are applying the leaves of same frequency"
-                            if sunday_count > 0: 
-                                ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                ls["Please Check"] = "You are applying for leave at the same frequency as previous requests. Please review your request."
+                            
+                            if sunday_count > 0:
+                                ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
+                            
                             return ls
+
                         
                         else:
                             if is_high_frequency: 
@@ -748,32 +860,41 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                                 print(e)  # Print only if Sundays exist
                             print("Submit medical certificates after coming")
                             print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
+                            ls = {
+                                "Important": "Please submit medical certificates upon your return to the office.",
+                                "Final Balance": f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}."
+                            }
                             
-                            ls["Important"]="Submit medical certificates after coming"
-                            ls["Final Balance"] = f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
-                        
-                            if is_high_frequency: 
-                                ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            if is_high_frequency:
+                                ls["Warning"] = "Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            
                             if same_diff:
-                                ls["Please Check"]="You are applying the leaves of same frequency"
-                            if sunday_count > 0: 
-                                ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                ls["Please Check"] = "You are applying for leave at the same frequency as previous requests. Please review your request carefully."
+                            
+                            if sunday_count > 0:
+                                ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
+                            
                             if employee_leave_rejection:
-                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                ls["Alert"] = "A pattern of leave requests with a high likelihood of rejection and absenteeism has been detected. This may reduce the chances of approval, and HR intervention is necessary to address the issue."
+                            
                             return ls
+
                 elif selected_leave_type == "Comp Off":
                     comp_off_balance = pd.to_numeric(data["co"].iloc[0], errors='coerce')
                     if comp_off_balance > 0:
-                        ls["Comp Off"] = "Your leave request will be processed."
+                        ls["Comp Off"] = "Your leave request will be processed as you have a remaining comp off balance."
                     else:
-                        ls["Comp Off"] = "You are not eligible to apply for Comp Off. You have no remaining balance"   
-                    return ls         
+                        ls["Comp Off"] = "You are not eligible to apply for comp off, as you have no remaining balance."
+                    
+                    return ls
+
                     
                 else:
                     print("Leave type isn't matching with the leave status")
                     return {
-                        "Error":"Leave type isn't matching with the leave status"
+                        "Error": "The leave type does not match the leave status."
                     }
+
             
             elif data["can_apply_leave"].iloc[0] == False:
                 if selected_leave_type == "Casual Leave" and leave_status != "Sick Leave" :
@@ -789,24 +910,29 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                             print(f"So it needs HR review & there will be LOP for {delta} days")
                             print("You can't apply the leave, it can be applied through only HR")
                             print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
-
-                            ls={
-                                "Decision":"Pending",
-                                "Detailed Review":f" Approving percentage is less So it needs HR review & there will be LOP for {delta} days",
-                                "Caution":"You can't apply the leave, it can be applied through only HR"
+                            ls = {
+                                "Decision": "Pending",
+                                "Detailed Review": f"Approval percentage is insufficient. HR review is required, and there will be a LOP for {delta} day(s).",
+                                "Caution": "Leave cannot be applied directly. It must go through HR for processing.",
+                                "LOP Deducted": f"Thus, ₹{(delta)*per_day_pay:.2f} would be deducted from your salary as LOP"
                             }
-                            ls["Final Balance"] = f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
-                        
-
-                            if is_high_frequency: 
-                                ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            
+                            ls["Final Balance"] = f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}."
+                            
+                            if is_high_frequency:
+                                ls["Warning"] = "Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            
                             if same_diff:
-                                ls["Please Check"]="You are applying the leaves of same frequency"
-                            if sunday_count > 0: 
-                                ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                ls["Please Check"] = "You are applying for leave at the same frequency as previous requests. Please review your request carefully."
+                            
+                            if sunday_count > 0:
+                                ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
+                            
                             if employee_leave_rejection:
-                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                ls["Alert"] = "A pattern of leave requests with a high likelihood of rejection and absenteeism has been detected. This may reduce the chances of approval, and HR intervention is necessary to address the issue."
+                            
                             return ls
+
                         elif delta < 3:
                             if sunday_count > 0: 
                                 print(e)  # Print only if Sundays exist
@@ -816,24 +942,32 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                             print(f"So it needs HR review & there will be LOP for {delta} days")
                             print("You can't apply the leave, it can be applied through only HR")
                             print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
-                            ls={
-                                "Decision":"Pending",
-                                "Detailed Reason" : f"You have chance of getting leave approved and it depends on the HR So it needs HR review & there will be LOP for {delta} days ",
-                                "Caution":"You can't apply the leave, it can be applied through only HR"
-                                }
-                            ls["Final Balance"] = f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
+                            ls = {
+                                "Decision": "Pending",
+                                "Detailed Reason": f"Your leave approval is contingent upon HR review. There will be a LOP for {delta} day(s) pending approval.",
+                                "Caution": "Leave cannot be applied directly. It must be processed through HR.",
+                                "LOP Deducted": f"Thus, ₹{(delta)*per_day_pay:.2f} would be deducted from your salary as LOP"
+                            }
+                            
+                            ls["Final Balance"] = f"Your final leave balance, after deducting the requested leave, is {data['lb'].iloc[0] - delta}."
+                            
                             if same_diff:
-                                ls["Please Check"]="You are applying the leaves of same frequency"
-                            if sunday_count > 0: 
-                                ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                ls["Please Check"] = "You are applying for leave at the same frequency as previous requests. Please review your request carefully."
+                            
+                            if sunday_count > 0:
+                                ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
+                            
                             if employee_leave_rejection:
-                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                ls["Alert"] = "A pattern of leave requests with a high likelihood of rejection and absenteeism has been detected. This may reduce the chances of approval, and HR intervention is necessary to address the issue."
+                            
                             return ls
+
                     elif today >= from_date:
                         print("You cant apply on the same date as cls leave type ")
                         return {
-                            "Error":"You cant apply on the same date as cls leave type"
+                            "Error": "Leave cannot be applied on the same date as the 'CLS' leave type."
                         }
+
                 elif selected_leave_type == "Sick Leave" and leave_status == "Sick Leave":
                     if today <= from_date and today < to_date:
                         if is_high_frequency: 
@@ -846,22 +980,27 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                         print(f"LOP for {delta} days because you don't have leave balance")
                         print("You can't apply the leave, it can be applied through only HR")
                         print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
-                        ls={
-                                "Decision":"Pending",
-                                "Detailed Reason" : f"Submit medical certificates after coming to office LOP for {delta} days because you don't have leave balance ",
-                                "Caution":"You can't apply the leave, it can be applied through only HR"
-                            }
-                        ls["Final Balance"] = f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
+                        ls = {
+                            "Decision": "Pending",
+                            "Detailed Reason": f"Medical certificates must be submitted after returning to the office. There will be LOP for {delta} days as you currently do not have sufficient leave balance.",
+                            "Caution": "Leave applications must be processed through HR due to the insufficient leave balance.",
+                            "LOP Deducted": f"Thus, ₹{(delta)*per_day_pay:.2f} would be deducted from your salary as LOP"
 
+                        }
+                        
+                        ls["Final Balance"] = f"Your final leave balance, after deducting the requested leaves, is {data['lb'].iloc[0] - delta}."
+                        
                         if is_high_frequency: 
-                            ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                            ls["Warning"] = "Your leave frequency is high. You have already taken more than 6 days of leave this month."
                         if same_diff:
-                            ls["Please Check"]="You are applying the leaves of same frequency"
+                            ls["Please Check"] = "You are applying for leaves of the same frequency. Please review."
                         if sunday_count > 0: 
-                            ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                            ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
                         if employee_leave_rejection:
-                            ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                            ls["Alert"] = "A high frequency of leave requests with a likelihood of rejection and absenteeism has been identified. HR intervention may be required to address this issue."
+                        
                         return ls
+
                     elif today > from_date:
                         if today >= to_date:
                             if is_high_frequency: 
@@ -873,19 +1012,24 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                             print("Submit medical certificates")
                             print(f"and your LOP will be {delta} days")
                             print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
-                            ls={
-                                "Decision":"Pending",
-                                "Detailed Reason" : f"Submit medical certificates and your LOP will be for {delta} days ",
-                            }
-                            ls["Final Balance"] = f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
+                            ls = {
+                                "Decision": "Pending",
+                                "Detailed Reason": f"Submit medical certificates. Your LOP will be for {delta} days due to insufficient leave balance.",
+                                "LOP Deducted": f"Thus, ₹{(delta)*per_day_pay:.2f} would be deducted from your salary as LOP"
 
+                            }
+                            
+                            ls["Final Balance"] = f"Your final leave balance, after deducting the requested leaves, is {data['lb'].iloc[0] - delta}."
+                            
                             if is_high_frequency: 
-                                ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                                ls["Warning"] = "Your leave frequency is high. You have already taken more than 6 days of leave this month."
                             if same_diff:
-                                ls["Please Check"]="You are applying the leaves of same frequency"
+                                ls["Please Check"] = "You are applying for leaves of the same frequency. Please review your request."
                             if sunday_count > 0: 
-                                ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
+                            
                             return ls
+
                         else:
                             if is_high_frequency: 
                                 print(h)
@@ -897,47 +1041,57 @@ def on_submit(email_value,leave_type_value,from_date_value,to_date_value,reason_
                             print("Submit medical certificates after coming")
                             print("You can't apply the leave, it can be applied through only HR")
                             print(f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}.")
-                            ls={
-                                "Decision":"Pending",
-                                "Detailed Reason" : f"Submit medical certificates after coming.",
-                                "Caution":"You can't apply the leave, it can be applied through only HR"
+                            
+                            ls = {
+                                "Decision": "Pending",
+                                "Detailed Reason": "Submit medical certificates after coming to the office.",
+                                "Caution": "You cannot apply for this leave directly; it must be processed through HR.",
+                                "LOP Deducted": f"Thus, ₹{(delta)*per_day_pay:.2f} would be deducted from your salary as LOP"
                             }
-                            ls["Final Balance"] = f"This is your final leave balance after deducting your requested leaves {data['lb'].iloc[0] - delta}."
-
+                            
+                            ls["Final Balance"] = f"Your final leave balance, after deducting the requested leaves, is {data['lb'].iloc[0] - delta}."
+                            
                             if is_high_frequency: 
-                                ls["Warning"]="Your leave frequency is high. You have already taken more than 6 days of leave this month."
+                                ls["Warning"] = "Your leave frequency is high. You have already taken more than 6 days of leave this month."
                             if same_diff:
-                                ls["Please Check"]="You are applying the leaves of same frequency"
+                                ls["Please Check"] = "You are applying for leaves of the same frequency. Please review your request."
                             if sunday_count > 0: 
-                                ls["Sunday Count"]=f"Sundays are included in the leave duration. {sunday_count} Sunday(s) were counted."
+                                ls["Sunday Count"] = f"Sundays are included in the leave duration. A total of {sunday_count} Sunday(s) were counted."
                             if employee_leave_rejection:
-                                ls["Alert"] = "The frequency of leave requests with a high likelihood of rejection and absences has been detected. So, it is less likely to be approved and HR intervention is required to address this issue."
+                                ls["Alert"] = "The frequency of leave requests suggests a high likelihood of rejection and absences. HR intervention is required."
+                            
                             return ls
+
                 elif selected_leave_type == "Comp Off":
                     comp_off_balance = pd.to_numeric(data["co"].iloc[0], errors='coerce')
                     if comp_off_balance > 0:
-                        ls["Comp Off"] = "Your leave request will be processed."
+                        ls["Comp Off"] = "Your leave request is being processed."
                     else:
-                        ls["Comp Off"] = "You are not eligible to apply for Comp Off. You have no remaining balance"   
-                    return ls            
+                        ls["Comp Off"] = "You are not eligible to apply for Comp Off due to insufficient remaining balance."
+
+                    
+                    return ls
+           
                 else:
                     print("Leave type isn't matching with the leave status")
                     return {
-                        "Error":"Leave type isn't matching with the leave status"
+                        "Error": "The leave type does not align with the current leave status"
                     }
+
             
             else:
                 print("You don't have enough leave balance")
                 return {
-                    "Reason":"You don't have enough leave balance"
+                    "Reason":"Insufficient leave balance to process the request."
                 }
         else:
             print("No data found for that email")
             print("Unable to process leave request.")
             return {
-                "Reason":"No data found for that email",
-                "Process":"Unable to process leave Request"
+                "Reason": "No records found associated with the provided email address.",
+                "Process": "Unable to process the leave request due to the absence of relevant data."
             }
+
 
 # Create widgets for the form
 leave_type_input = widgets.Dropdown(
