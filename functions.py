@@ -293,8 +293,8 @@ def rejected_and_absent(empemail):
 
         # Get the current year and the date range from March 1st this year to March 1st next year
         current_year = datetime.now().year
-        start_date = datetime(current_year, 3, 1).date()  # March 1 of the current year
-        end_date = datetime(current_year + 1, 3, 1).date()  # March 1 of the next year
+        start_date = datetime(current_year-1, 3, 1).date()  # March 1 of the previous year
+        end_date = datetime(current_year, 3, 1).date()  # March 1 of the current year
 
         # First, check if the status2 count is greater than 2 in the leaves table within the date range
         query_leaves = """
@@ -449,7 +449,7 @@ def salary(empemail):
 def calculate_lop(ctc, delta):
     today = date.today()
     current_month_days = calendar.monthrange(today.year, today.month)[1]  
-    per_day_pay = int(ctc) / int(current_month_days)  
+    per_day_pay = float(ctc) / int(current_month_days)  
     return per_day_pay
 
 
